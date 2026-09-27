@@ -10,7 +10,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    environment: TELEGRAM_TOKEN # <-- Esto le indica que use los secretos de ese entorno
+    environment: TELEGRAM_TOKEN # Indica que use los secretos de ese entorno
     steps:
       - name: Copiar código del repositorio
         uses: actions/checkout@v4
@@ -33,3 +33,11 @@ jobs:
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: |
           python devocional.py
+
+      - name: Persistir historial de devocionales
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add procesados.json
+          git commit -m "chore: actualizar historial de devocional enviado [skip ci]" || exit 0
+          git push

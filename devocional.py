@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import feedparser
 import requests
 from datetime import datetime
@@ -17,12 +18,47 @@ CHAT_ID = os.getenv("CHAT_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
+HISTORIAL_FILE = "procesados.json"
+
 # Mapeo de meses en español para validar la fecha
 MESES_ESPANOL = {
     1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
     5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
     9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
 }
+
+
+def cargar_historial():
+    """Carga los IDs de videos que ya fueron enviados previamente."""
+    if os.path.exists(HISTORIAL_FILE):
+        with open(HISTORIAL_FILE, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except Exception:
+                return []
+    return []
+
+
+def guardar_en_historial(video_id):
+    """Guarda un nuevo ID de video en el archivo local JSON."""
+    historial = cargar_historial()
+    if video_id not in historial:
+        historial.append(video_id)
+        with open(HISTORIAL_FILE, "w", encoding="utf-8") as f:
+            json.dump(historial, f, indent=2)
+
+
+def extraer_youtube_id(entry):
+    """Extrae el ID único del video de YouTube (ej. dQw4w9WgXcQ)."""
+    if hasattr(entry, "yt_videoid"):
+        return entry.yt_videoid
+    match = re.search(
+        r"(?:v=|\/embed\/|\/1\/|\/v\/|https?:\/\/(?:www\.)?youtu\.be\/|\/e\/|watch\?v=|^)([a-zA-Z0-9_-]{11})",
+        entry.link,
+    )
+    if match:
+        return match.group(1)
+    return entry.link
 
 
 def obtener_fecha_hoy_venezuela():
@@ -46,7 +82,6 @@ def es_devocional_de_hoy(titulo):
     dia, mes, anio = obtener_fecha_hoy_venezuela()
 
     # Expresión regular que busca el día y el mes actual en el título
-    # Ejemplo que matchea: "27 Septiembre", "27 de Septiembre", "27 Septiembre 2026"
     patron_fecha = rf"\b{dia}\s+(de\s+)?{mes}\b"
 
     if re.search(patron_fecha, titulo, re.IGNORECASE):
@@ -106,13 +141,22 @@ def main():
 
     titulo_video = devocional_entry.title
     link_video = devocional_entry.link
-    print(f" Devocional del día encontrado: {titulo_video}")
+    video_id = extraer_youtube_id(devocional_entry)
+
+    print(f" Devocional del día encontrado: {titulo_video} (ID: {video_id})")
+
+    # --- VERIFICACIÓN DE DUPLICADOS ---
+    historial = cargar_historial()
+    if video_id in historial:
+        print(f"[LOG] El devocional con ID '{video_id}' ya fue enviado a Telegram previamente. Omitiendo...")
+        return
+    # ----------------------------------
 
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     prompt = f"""
     Eres un asistente teológico personal. Analiza el título del video devocional de hoy: "{titulo_video}".
-    El título contiene la fecha y la referencia bíblica. Extrae la referencia bíblica exacta y redacta el devocional siguiendo estrictamente esta estructura, tono y formato de viñetas:
+    El título contiene la fecha y la referencia bíblica. Extrae la referencia bíblica exacta y redacta el devocional siguiendo strictly esta estructura, tono y formato de viñetas:
 
     📖 Mi tiempo con Dios: [REFERENCIA_BÍBLICA_EXTRAÍDA]
 
@@ -137,16 +181,19 @@ def main():
     """
 
     try:
-        # Se usa el nombre del modelo validado en tu entorno
-        response = generar_contenido_seguro(client, "gemini-3.8-flash", prompt)
+        response = generar_contenido_seguro(client, "gemini-2.5-flash", prompt)
         devocional_texto = response.text
     except Exception as e:
         print(f"[ERROR CRÍTICO] No se pudo generar el contenido tras varios reintentos con Gemini: {e}")
         return
 
     print("Enviando resultado a Telegram...")
-    enviar_telegram(devocional_texto)
-    print("¡Proceso completado con éxito!")
+    res_telegram = enviar_telegram(devocional_texto)
+
+    # Solo si el envío a Telegram fue exitoso, guardamos en el historial
+    if res_telegram.get("ok"):
+        guardar_en_historial(video_id)
+        print("¡Proceso completado con éxito y registrado en historial!")
 
 
 if __name__ == "__main__":

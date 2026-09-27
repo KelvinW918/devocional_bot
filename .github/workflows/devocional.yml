@@ -2,7 +2,9 @@ name: Ejecutar Devocional Diario
 
 on:
   schedule:
-    - cron: '0 14 * * *'
+    # Intenta a las 10:00 AM, 12:00 PM, 2:00 PM y 4:00 PM (Hora Venezuela)
+    # (14:00, 16:00, 18:00 y 20:00 UTC)
+    - cron: "0 14,16,18,20 * * *"
   workflow_dispatch:
 
 jobs:
@@ -16,7 +18,7 @@ jobs:
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Instalar dependencias
         run: |

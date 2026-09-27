@@ -2,6 +2,8 @@ import os
 import re
 import feedparser
 import requests
+from datetime import datetime
+import zoneinfo
 from dotenv import load_dotenv
 from google import genai
 from google.genai.errors import ServerError
@@ -15,49 +17,75 @@ CHAT_ID = os.getenv("CHAT_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-# Patrón regex estricto para validar la estructura del título
-# Ejemplo compatible: "Tu Tiempo con Dios 26 Septiembre 2026 (1 Cronicas 15:16-29)"
-PATRON_DEVOCIONAL = r"Tu\s+Tiempo\s+con\s+Dios"
+# Mapeo de meses en español para validar la fecha
+MESES_ESPANOL = {
+    1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+    5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+    9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
+}
 
 
-def es_devocional_valido(titulo):
-    """Verifica si el título contiene la frase clave del devocional."""
-    return bool(re.search(PATRON_DEVOCIONAL, titulo, re.IGNORECASE))
+def obtener_fecha_hoy_venezuela():
+    """Obtiene la fecha actual configurada en el huso horario de Venezuela."""
+    tz = zoneinfo.ZoneInfo("America/Caracas")
+    ahora = datetime.now(tz)
+    dia = ahora.day
+    mes = MESES_ESPANOL[ahora.month]
+    anio = ahora.year
+    return dia, mes, anio
+
+
+def es_devocional_de_hoy(titulo):
+    """
+    Verifica que el título contenga 'Tu Tiempo con Dios'
+    Y ADEMÁS la fecha coincida exactamente con el día de hoy (ej. 27 Septiembre 2026).
+    """
+    if not re.search(r"Tu\s+Tiempo\s+con\s+Dios", titulo, re.IGNORECASE):
+        return False
+
+    dia, mes, anio = obtener_fecha_hoy_venezuela()
+
+    # Expresión regular que busca el día y el mes actual en el título
+    # Ejemplo que matchea: "27 Septiembre", "27 de Septiembre", "27 Septiembre 2026"
+    patron_fecha = rf"\b{dia}\s+(de\s+)?{mes}\b"
+
+    if re.search(patron_fecha, titulo, re.IGNORECASE):
+        return True
+
+    return False
 
 
 def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": mensaje}
 
-    print("[LOG] Intentando enviar mensaje a la URL de Telegram...")
-    print(f"[LOG] CHAT_ID utilizado: {CHAT_ID}")
-
+    print("[LOG] Intentando enviar mensaje a Telegram...")
     response = requests.post(url, json=payload)
-
-    print(f"[LOG] Código de estado HTTP de Telegram: {response.status_code}")
-    print(f"[LOG] Respuesta completa de Telegram: {response.text}")
 
     if response.status_code == 200:
         print("¡Mensaje enviado con éxito a Telegram!")
     else:
-        print("¡Error al enviar el mensaje!")
+        print(f"¡Error al enviar el mensaje! Código: {response.status_code}")
 
     return response.json()
 
 
-# Función decorada con reintentos para manejar caídas o saturaciones de la API de Gemini (503)
+# Decorador con reintentos para soportar fallos 503 o caídas de Gemini
 @retry(
-    stop=stop_after_attempt(5),  # Intentar hasta 5 veces
-    wait=wait_exponential(multiplier=2, min=4, max=30),  # Espera progresiva (4s, 8s, 16s...)
-    retry=retry_if_exception_type(ServerError),  # Reintentar si hay ServerError (503)
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=4, max=30),
+    retry=retry_if_exception_type((ServerError, Exception)),
     reraise=True,
 )
 def generar_contenido_seguro(client, model_name, prompt):
+    print(f"[LOG] Solicitando generación a Gemini ({model_name})...")
     return client.models.generate_content(model=model_name, contents=prompt)
 
 
 def main():
-    print("Buscando el último video devocional del canal...")
+    dia, mes, anio = obtener_fecha_hoy_venezuela()
+    print(f"Buscando devocional para el día de hoy: {dia} de {mes} de {anio}...")
+
     feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={CHANNEL_ID}"
     feed = feedparser.parse(feed_url)
 
@@ -65,22 +93,21 @@ def main():
         print("No se encontraron videos en el canal.")
         return
 
-    # Buscar entre las últimas entradas del feed el primer video que coincida con el patrón
     devocional_entry = None
     for entry in feed.entries:
-        if es_devocional_valido(entry.title):
+        if es_devocional_de_hoy(entry.title):
             devocional_entry = entry
             break
 
     if not devocional_entry:
-        print("No se encontró ningún video reciente con la estructura 'Tu Tiempo con Dios'. Expirando sin procesar...")
+        print(f"[AVISO] Aún no se ha publicado el devocional correspondiente a hoy ({dia} de {mes}).")
+        print("Finalizando ejecución sin procesar videos antiguos.")
         return
 
     titulo_video = devocional_entry.title
     link_video = devocional_entry.link
-    print(f"Devocional encontrado: {titulo_video}")
+    print(f" Devocional del día encontrado: {titulo_video}")
 
-    print("Generando devocional con Gemini...")
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     prompt = f"""
@@ -110,11 +137,11 @@ def main():
     """
 
     try:
-        # Usamos un nombre de modelo estándar soportado por la API oficial
+        # Se usa el nombre del modelo validado en tu entorno
         response = generar_contenido_seguro(client, "gemini-3.8-flash", prompt)
         devocional_texto = response.text
     except Exception as e:
-        print(f"[ERROR CRÍTICO] No se pudo generar el contenido tras varios reintentos: {e}")
+        print(f"[ERROR CRÍTICO] No se pudo generar el contenido tras varios reintentos con Gemini: {e}")
         return
 
     print("Enviando resultado a Telegram...")

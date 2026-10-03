@@ -181,7 +181,7 @@ def main():
     """
 
     try:
-        response = generar_contenido_seguro(client, "gemini-2.5-flash", prompt)
+        response = generar_contenido_seguro(client, "gemini-3.8-flash", prompt)
         devocional_texto = response.text
     except Exception as e:
         print(f"[ERROR CRÍTICO] No se pudo generar el contenido tras varios reintentos con Gemini: {e}")

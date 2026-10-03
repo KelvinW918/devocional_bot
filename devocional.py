@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import time
+import random
 import feedparser
 import requests
 from datetime import datetime
@@ -8,7 +10,7 @@ import zoneinfo
 from dotenv import load_dotenv
 from google import genai
 from google.genai.errors import ServerError
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 # Cargar variables del entorno
 load_dotenv()
@@ -28,15 +30,27 @@ MESES_ESPANOL = {
 }
 
 
+def asegurar_historial():
+    """Asegura la existencia del archivo de historial al inicio para prevenir errores."""
+    if not os.path.exists(HISTORIAL_FILE):
+        try:
+            with open(HISTORIAL_FILE, "w", encoding="utf-8") as f:
+                json.dump([], f, indent=2)
+            print(f"[INFO] Archivo {HISTORIAL_FILE} creado (lista vacía).")
+        except Exception as e:
+            print(f"[WARN] No se pudo crear {HISTORIAL_FILE}: {e}")
+
+
 def cargar_historial():
     """Carga los IDs de videos que ya fueron enviados previamente."""
-    if os.path.exists(HISTORIAL_FILE):
-        with open(HISTORIAL_FILE, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except Exception:
-                return []
-    return []
+    if not os.path.exists(HISTORIAL_FILE):
+        asegurar_historial()
+        return []
+    with open(HISTORIAL_FILE, "r", encoding="utf-8") as f:
+        try:
+            return json.load(f)
+        except Exception:
+            return []
 
 
 def guardar_en_historial(video_id):
@@ -105,19 +119,26 @@ def enviar_telegram(mensaje):
     return response.json()
 
 
-# Decorador con reintentos para soportar fallos 503 o caídas de Gemini
+# Reintentos específicos: reintenta si es ServerError o si la excepción menciona 503/unavailable/high demand
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=2, min=4, max=30),
-    retry=retry_if_exception_type((ServerError, Exception)),
+    retry=retry_if_exception(
+        lambda exc: isinstance(exc, ServerError)
+        or '503' in str(exc)
+        or 'unavailable' in str(exc).lower()
+        or 'high demand' in str(exc).lower()
+    ),
     reraise=True,
 )
 def generar_contenido_seguro(client, model_name, prompt):
     print(f"[LOG] Solicitando generación a Gemini ({model_name})...")
-    return client.models.generate_content(model=model_name, contents=prompt)
+    response = client.models.generate_content(model=model_name, contents=prompt)
+    return response
 
 
 def main():
+    asegurar_historial()
     dia, mes, anio = obtener_fecha_hoy_venezuela()
     print(f"Buscando devocional para el día de hoy: {dia} de {mes} de {anio}...")
 
@@ -156,7 +177,7 @@ def main():
 
     prompt = f"""
     Eres un asistente teológico personal. Analiza el título del video devocional de hoy: "{titulo_video}".
-    El título contiene la fecha y la referencia bíblica. Extrae la referencia bíblica exacta y redacta el devocional siguiendo strictly esta estructura, tono y formato de viñetas:
+    El título contiene la fecha y la referencia bíblica. Extrae la referencia bíblica exacta y redacta el devocional siguiendo estrictamente esta estructura, tono y formato de viñetas:
 
     📖 Mi tiempo con Dios: [REFERENCIA_BÍBLICA_EXTRAÍDA]
 

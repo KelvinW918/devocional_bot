@@ -46,7 +46,12 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add procesados.json
-          git commit -m "chore: actualizar historial de devocional enviado [skip ci]" || exit 0
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git push origin HEAD:refs/heads/${{ github.ref_name || 'main' }}
+          if [ -f procesados.json ]; then
+            git add procesados.json
+            # Si no hay cambios, no queremos fallar — usamos || true
+            git commit -m "chore: actualizar historial de devocional enviado [skip ci]" || true
+            git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+            git push origin HEAD:refs/heads/${{ github.ref_name || 'main' }}
+          else
+            echo "procesados.json no existe — omitiendo commit/push."
+          fi

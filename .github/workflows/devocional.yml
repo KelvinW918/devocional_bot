@@ -1,20 +1,23 @@
 name: Ejecutar Devocional Diario
 
-# Permiso explícito de escritura para guardar procesados.json
 permissions:
   contents: write
 
 on:
   schedule:
-    # Intenta a las 10:00 AM, 12:00 PM, 2:00 PM y 4:00 PM (Hora Venezuela)
-    # (14:00, 16:00, 18:00 y 20:00 UTC)
-    - cron: "0 14,16,18,20 * * *"
+    # 10:00 UTC = 6:00 AM Venezuela
+    # 12:00 UTC = 8:00 AM Venezuela
+    # 14:00 UTC = 10:00 AM Venezuela
+    # 16:00 UTC = 12:00 PM Venezuela
+    # 18:00 UTC = 2:00 PM Venezuela
+    # 20:00 UTC = 4:00 PM Venezuela
+    - cron: "0 10,12,14,16,18,20 * * *"
   workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    environment: TELEGRAM_TOKEN # Indica que use los secretos de ese entorno
+    environment: TELEGRAM_TOKEN
     steps:
       - name: Copiar código del repositorio
         uses: actions/checkout@v4
@@ -48,7 +51,6 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           if [ -f procesados.json ]; then
             git add procesados.json
-            # Si no hay cambios, no queremos fallar — usamos || true
             git commit -m "chore: actualizar historial de devocional enviado [skip ci]" || true
             git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
             git push origin HEAD:refs/heads/${{ github.ref_name || 'main' }}
